@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { db } from './firebase';
-import { doc, onSnapshot, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STYLES
@@ -334,8 +334,7 @@ const AUTO_TRIGGERS = [
   { id:'completion', label:'Completion cheer',    desc:'Celebrate when all tasks are done!',             icon:'🎉', defaultTier:'friendly'  },
 ];
 
-let _n=1;
-const uid=()=>`u${_n++}`;
+const uid=()=>Math.random().toString(36).slice(2,9)+Date.now().toString(36).slice(-4);
 const ini=n=>n.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase();
 const fmtTime=d=>new Date(d).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
 const fmtDate=d=>new Date(d).toLocaleDateString([],{month:'short',day:'numeric'});
@@ -714,9 +713,9 @@ function EditRewardModal({item,onSave,onClose}){
 // ─────────────────────────────────────────────────────────────────────────────
 //  TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
-function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onEdit}){
-  const done=task.completedBy.length>0;
-  const completer=done?members.find(m=>m.id===task.completedBy[0]):null;
+function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onEdit,completedByUserId}){
+  const done=!!completedByUserId;
+  const completer=completedByUserId?members.find(m=>m.id===completedByUserId):null;
   const ref=useRef(null);
   function check(){
     if(done)return;
@@ -1040,12 +1039,13 @@ const HIVE_DOC = doc(db, 'hive', 'data');
 
 export default function App(){
   // ── Firestore-backed shared state ──
-  const [loading,  setLoading]   = useState(true);
-  const [users,    setUsersRaw]  = useState([]);
-  const [tasks,    setTasksRaw]  = useState(DEFAULT_TASKS);
-  const [store,    setStoreRaw]  = useState(DEFAULT_STORE);
-  const [notifLog, setNotifLogRaw]= useState([]);
-  const [autoConfig,setAutoConfigRaw]= useState(DEFAULT_AUTO);
+  const [loading,     setLoading]      = useState(true);
+  const [users,       setUsersRaw]     = useState([]);
+  const [tasks,       setTasksRaw]     = useState(DEFAULT_TASKS);
+  const [store,       setStoreRaw]     = useState(DEFAULT_STORE);
+  const [notifLog,    setNotifLogRaw]  = useState([]);
+  const [autoConfig,  setAutoConfigRaw]= useState(DEFAULT_AUTO);
+  const [completions, setCompletions]  = useState({}); // { [taskId]: userId }
 
   // ── Device-local session ──
   const [curId,    setCurIdRaw]  = useState(()=>lsGet('hive_session', null));
@@ -1060,10 +1060,17 @@ export default function App(){
       if(snap.exists()){
         const d = snap.data();
         if(d.users      !== undefined) setUsersRaw(d.users);
-        if(d.tasks      !== undefined) setTasksRaw(d.tasks);
         if(d.store      !== undefined) setStoreRaw(d.store);
         if(d.notifLog   !== undefined) setNotifLogRaw(d.notifLog);
         if(d.autoConfig !== undefined) setAutoConfigRaw(d.autoConfig);
+        if(d.completions!== undefined) setCompletions(d.completions);
+        if(d.tasks      !== undefined){
+          // Deduplicate by id in case of any prior race condition
+          const seen=new Set();
+          const deduped=d.tasks.filter(t=>{ if(seen.has(t.id))return false; seen.add(t.id); return true; });
+          setTasksRaw(deduped);
+          if(deduped.length < d.tasks.length) setDoc(HIVE_DOC,{tasks:deduped},{merge:true});
+        }
       } else {
         // First time — seed the document with defaults
         setDoc(HIVE_DOC, {
@@ -1072,6 +1079,7 @@ export default function App(){
           store: DEFAULT_STORE,
           notifLog: [],
           autoConfig: DEFAULT_AUTO,
+          completions: {},
         });
       }
       firestoreReady.current = true;
@@ -1166,7 +1174,7 @@ export default function App(){
   useEffect(()=>{
     if(!isAdmin||notifPermission!=='granted')return;
     const iv=setInterval(()=>{
-      const pendingCount=tasks.filter(t=>t.completedBy.length===0).length;
+      const pendingCount=tasks.filter(t=>!completions[t.id]).length;
       const hour=new Date().getHours();
       // Morning: 8am
       if(hour===8&&autoConfig.morning?.enabled&&pendingCount>0){
@@ -1228,9 +1236,10 @@ export default function App(){
   }
   function handleAddTask(task){setTasks(p=>[task,...p]);setModal(null);toastMsg('Task added ✓');}
   function handleComplete(taskId,userId,pts){
-    const task=tasks.find(t=>t.id===taskId);
-    if(!task||task.completedBy.length>0)return; // already completed by someone
-    setTasks(p=>p.map(t=>t.id===taskId?{...t,completedBy:[userId]}:t));
+    if(completions[taskId])return; // already completed by someone
+    // Atomic field-level write — never overwrites another device's completion
+    updateDoc(HIVE_DOC,{[`completions.${taskId}`]:userId});
+    setCompletions(p=>({...p,[taskId]:userId}));
     setUsers(p=>p.map(u=>u.id===userId?{...u,points:u.points+pts}:u));
     setTimeout(()=>toastMsg(`🎉 +${pts} points earned!`),220);
   }
@@ -1278,8 +1287,8 @@ export default function App(){
   if(!cu) return <><FontLoader/><Login users={users} onLogin={handleLogin} onRegister={handleRegister}/></>;
 
   const myTasks=isAdmin?tasks:tasks.filter(t=>!t.assignedTo||t.assignedTo===cu.id);
-  const pending=myTasks.filter(t=>t.completedBy.length===0);
-  const doneT=myTasks.filter(t=>t.completedBy.length>0);
+  const pending=myTasks.filter(t=>!completions[t.id]);
+  const doneT=myTasks.filter(t=>!!completions[t.id]);
   const pct=myTasks.length?Math.round(doneT.length/myTasks.length*100):0;
 
   return (
@@ -1344,7 +1353,7 @@ export default function App(){
               {myTasks.length===0&&<div className="empty-state"><div className="empty-emoji">🌿</div><div className="empty-title">No tasks yet</div><p style={{fontSize:'13px'}}>{isAdmin?'Add some tasks above!':'Check back soon.'}</p></div>}
               {pending.map((t,i)=>(
                 <div key={t.id} style={{animation:`fadeUp 0.3s ease ${i*0.05}s both`}}>
-                  <TaskCard task={t} userId={cu.id} members={users} onComplete={handleComplete} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask}/>
+                  <TaskCard task={t} userId={cu.id} members={users} onComplete={handleComplete} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask} completedByUserId={completions[t.id]||null}/>
                 </div>
               ))}
               {doneT.length>0&&(
@@ -1354,7 +1363,7 @@ export default function App(){
                     <span style={{fontSize:'11px',color:'var(--text-light)',fontWeight:500,whiteSpace:'nowrap'}}>Completed ✓</span>
                     <div style={{flex:1,height:'1px',background:'var(--cream-dark)'}}/>
                   </div>
-                  {doneT.map(t=><TaskCard key={t.id} task={t} userId={cu.id} members={users} onComplete={()=>{}} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask}/>)}
+                  {doneT.map(t=><TaskCard key={t.id} task={t} userId={cu.id} members={users} onComplete={()=>{}} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask} completedByUserId={completions[t.id]||null}/>)}
                 </>
               )}
             </div>
