@@ -1021,25 +1021,6 @@ export default function App(){
     });
   };
 
-  if(loading) return (
-    <>
-      <FontLoader/>
-      <div style={{
-        minHeight:'100vh', background:'var(--cream)',
-        display:'flex', flexDirection:'column',
-        alignItems:'center', justifyContent:'center',
-        gap:'16px',
-      }}>
-        <div style={{fontSize:'52px'}}>🏡</div>
-        <h2 style={{
-          fontFamily:"'Playfair Display',serif",
-          fontSize:'22px', color:'var(--espresso)',
-          fontWeight:400,
-        }}>Loading your home…</h2>
-      </div>
-    </>
-  );
-
   const [notifPermission,setNotifPermission]=useState(
     typeof Notification!=='undefined'?Notification.permission:'unsupported'
   );
@@ -1147,6 +1128,25 @@ export default function App(){
     ]:[]),
     {id:'leaderboard',label:'🏅  Leaderboard'},
   ];
+
+  if(loading) return (
+    <>
+      <FontLoader/>
+      <div style={{
+        minHeight:"100vh", background:"var(--cream)",
+        display:"flex", flexDirection:"column",
+        alignItems:"center", justifyContent:"center",
+        gap:"16px",
+      }}>
+        <div style={{fontSize:"52px"}}>🏡</div>
+        <h2 style={{
+          fontFamily:"'Playfair Display',serif",
+          fontSize:"22px", color:"var(--espresso)",
+          fontWeight:400,
+        }}>Loading your home…</h2>
+      </div>
+    </>
+  );
 
   if(!cu) return <><FontLoader/><Login users={users} onLogin={handleLogin} onRegister={handleRegister}/></>;
 
