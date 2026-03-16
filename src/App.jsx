@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { db } from './firebase';
+import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  STYLES
@@ -909,11 +911,7 @@ function Login({users,onLogin,onRegister}){
 // ─────────────────────────────────────────────────────────────────────────────
 //  MAIN APP
 // ─────────────────────────────────────────────────────────────────────────────
-// ── localStorage helpers ───────────────────────────────────────────────────────
-const LS_KEYS = {
-  users:'hive_users', tasks:'hive_tasks', store:'hive_store',
-  notifLog:'hive_notifLog', autoConfig:'hive_autoConfig', session:'hive_session',
-};
+// ── localStorage helper (session only) ────────────────────────────────────────
 function lsGet(key, fallback) {
   try { const v=localStorage.getItem(key); return v?JSON.parse(v):fallback; } catch{ return fallback; }
 }
@@ -934,22 +932,113 @@ const DEFAULT_STORE = [
 ];
 const DEFAULT_AUTO = Object.fromEntries(AUTO_TRIGGERS.map(t=>[t.id,{enabled:false,tier:t.defaultTier}]));
 
-export default function App(){
-  // ── Persisted state — loads from localStorage on first render ──
-  const [users,   setUsersRaw]   = useState(()=>lsGet(LS_KEYS.users,   []));
-  const [tasks,   setTasksRaw]   = useState(()=>lsGet(LS_KEYS.tasks,   DEFAULT_TASKS));
-  const [store,   setStoreRaw]   = useState(()=>lsGet(LS_KEYS.store,   DEFAULT_STORE));
-  const [notifLog,setNotifLogRaw]= useState(()=>lsGet(LS_KEYS.notifLog,[]));
-  const [autoConfig,setAutoConfigRaw]=useState(()=>lsGet(LS_KEYS.autoConfig,DEFAULT_AUTO));
-  const [curId,   setCurIdRaw]   = useState(()=>lsGet(LS_KEYS.session,  null));
+const HIVE_DOC = doc(db, 'hive', 'data');
 
-  // Wrapped setters that also persist to localStorage
-  const setUsers    = v=>{ const n=typeof v==='function'?v(users):v;    setUsersRaw(n);    lsSet(LS_KEYS.users,n); };
-  const setTasks    = v=>{ const n=typeof v==='function'?v(tasks):v;    setTasksRaw(n);    lsSet(LS_KEYS.tasks,n); };
-  const setStore    = v=>{ const n=typeof v==='function'?v(store):v;    setStoreRaw(n);    lsSet(LS_KEYS.store,n); };
-  const setNotifLog = v=>{ const n=typeof v==='function'?v(notifLog):v; setNotifLogRaw(n); lsSet(LS_KEYS.notifLog,n); };
-  const setAutoConfig=v=>{ const n=typeof v==='function'?v(autoConfig):v;setAutoConfigRaw(n);lsSet(LS_KEYS.autoConfig,n); };
-  const setCurId    = v=>{ const n=typeof v==='function'?v(curId):v;    setCurIdRaw(n);    lsSet(LS_KEYS.session,n); };
+export default function App(){
+  // ── Firestore-backed shared state ──
+  const [loading,  setLoading]   = useState(true);
+  const [users,    setUsersRaw]  = useState([]);
+  const [tasks,    setTasksRaw]  = useState(DEFAULT_TASKS);
+  const [store,    setStoreRaw]  = useState(DEFAULT_STORE);
+  const [notifLog, setNotifLogRaw]= useState([]);
+  const [autoConfig,setAutoConfigRaw]= useState(DEFAULT_AUTO);
+
+  // ── Device-local session ──
+  const [curId,    setCurIdRaw]  = useState(()=>lsGet('hive_session', null));
+  const setCurId = v=>{ const n=typeof v==='function'?v(curId):v; setCurIdRaw(n); lsSet('hive_session',n); };
+
+  // Track whether the initial snapshot has been received (suppress writes before then)
+  const firestoreReady = useRef(false);
+
+  // Listen for real-time Firestore updates
+  useEffect(()=>{
+    const unsub = onSnapshot(HIVE_DOC, snap => {
+      if(snap.exists()){
+        const d = snap.data();
+        if(d.users      !== undefined) setUsersRaw(d.users);
+        if(d.tasks      !== undefined) setTasksRaw(d.tasks);
+        if(d.store      !== undefined) setStoreRaw(d.store);
+        if(d.notifLog   !== undefined) setNotifLogRaw(d.notifLog);
+        if(d.autoConfig !== undefined) setAutoConfigRaw(d.autoConfig);
+      } else {
+        // First time — seed the document with defaults
+        setDoc(HIVE_DOC, {
+          users: [],
+          tasks: DEFAULT_TASKS,
+          store: DEFAULT_STORE,
+          notifLog: [],
+          autoConfig: DEFAULT_AUTO,
+        });
+      }
+      firestoreReady.current = true;
+      setLoading(false);
+    }, err => {
+      console.error('Firestore snapshot error:', err);
+      setLoading(false);
+    });
+    return () => unsub();
+  }, []);
+
+  // Helpers to update state + write back to Firestore atomically
+  const fsWrite = useCallback((patch) => {
+    if(!firestoreReady.current) return;
+    setDoc(HIVE_DOC, patch, { merge: true });
+  }, []);
+
+  const setUsers = v => {
+    setUsersRaw(prev => {
+      const n = typeof v==='function' ? v(prev) : v;
+      fsWrite({ users: n });
+      return n;
+    });
+  };
+  const setTasks = v => {
+    setTasksRaw(prev => {
+      const n = typeof v==='function' ? v(prev) : v;
+      fsWrite({ tasks: n });
+      return n;
+    });
+  };
+  const setStore = v => {
+    setStoreRaw(prev => {
+      const n = typeof v==='function' ? v(prev) : v;
+      fsWrite({ store: n });
+      return n;
+    });
+  };
+  const setNotifLog = v => {
+    setNotifLogRaw(prev => {
+      const n = typeof v==='function' ? v(prev) : v;
+      fsWrite({ notifLog: n });
+      return n;
+    });
+  };
+  const setAutoConfig = v => {
+    setAutoConfigRaw(prev => {
+      const n = typeof v==='function' ? v(prev) : v;
+      fsWrite({ autoConfig: n });
+      return n;
+    });
+  };
+
+  if(loading) return (
+    <>
+      <FontLoader/>
+      <div style={{
+        minHeight:'100vh', background:'var(--cream)',
+        display:'flex', flexDirection:'column',
+        alignItems:'center', justifyContent:'center',
+        gap:'16px',
+      }}>
+        <div style={{fontSize:'52px'}}>🏡</div>
+        <h2 style={{
+          fontFamily:"'Playfair Display',serif",
+          fontSize:'22px', color:'var(--espresso)',
+          fontWeight:400,
+        }}>Loading your home…</h2>
+      </div>
+    </>
+  );
 
   const [notifPermission,setNotifPermission]=useState(
     typeof Notification!=='undefined'?Notification.permission:'unsupported'
