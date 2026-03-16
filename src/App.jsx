@@ -1046,8 +1046,13 @@ export default function App(){
         if(d.store      !== undefined) setStoreRaw(d.store);
         if(d.notifLog   !== undefined) setNotifLogRaw(d.notifLog);
         if(d.autoConfig !== undefined) setAutoConfigRaw(d.autoConfig);
-        if(d.completions  !== undefined) setCompletions(d.completions);
+        setCompletions(d.completions ?? {});
         if(d.pendingNotifs!== undefined) setPendingNotifs(d.pendingNotifs);
+        // Back-fill missing fields for documents created before these were added
+        const missing={};
+        if(d.completions  === undefined) missing.completions  = {};
+        if(d.pendingNotifs=== undefined) missing.pendingNotifs= [];
+        if(Object.keys(missing).length)  setDoc(HIVE_DOC, missing, {merge:true});
         if(d.tasks      !== undefined){
           // Deduplicate by id in case of any prior race condition
           const seen=new Set();
