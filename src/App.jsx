@@ -1170,8 +1170,12 @@ export default function App(){
   },[]);
 
   // Show notifications addressed to this device's user
+  // Skip if this device has a VAPID push subscription — the SW handles delivery
   useEffect(()=>{
     if(!curId||!pendingNotifs.length)return;
+    const deviceId=lsGet('hive_device_id',null);
+    const hasVapid=VAPID_PUBLIC_KEY&&deviceId&&pushSubs[curId]?.[deviceId];
+    if(hasVapid)return;
     pendingNotifs.forEach(n=>{
       if(shownNotifsRef.current.has(n.id))return;
       if(n.targetUserId!=='all'&&n.targetUserId!==curId)return;
@@ -1179,7 +1183,7 @@ export default function App(){
       localStorage.setItem('hive_shown_notifs',JSON.stringify([...shownNotifsRef.current]));
       sendNotification(swRegRef.current,{title:n.title,body:n.body,tier:n.tier,tag:`hive-notif-${n.id}`});
     });
-  },[pendingNotifs,curId]);
+  },[pendingNotifs,curId,pushSubs]);
 
   // Reload app when returning from background (e.g. swipe away and back on mobile)
   useEffect(()=>{
