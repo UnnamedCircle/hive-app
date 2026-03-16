@@ -345,34 +345,7 @@ const fmtDate=d=>new Date(d).toLocaleDateString([],{month:'short',day:'numeric'}
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return null;
   try {
-    // In production, point to '/hive-sw.js'
-    // In this demo we register an inline SW via blob URL
-    const swCode = `
-      self.addEventListener('install',()=>self.skipWaiting());
-      self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
-      self.addEventListener('notificationclick',function(e){
-        e.notification.close();
-        e.waitUntil(self.clients.matchAll({type:'window'}).then(c=>{
-          if(c.length)c[0].focus(); else self.clients.openWindow('/');
-        }));
-      });
-      self.addEventListener('message',function(e){
-        if(e.data&&e.data.type==='SHOW_NOTIFICATION'){
-          const{title,body,tier,tag}=e.data;
-          const vibrate={friendly:[100],moderate:[100,50,100],urgent:[200,100,200,100,200]};
-          const req={friendly:false,moderate:false,urgent:true};
-          e.waitUntil(self.registration.showNotification(title,{
-            body,tag:tag||'hive',
-            requireInteraction:req[tier]||false,
-            vibrate:vibrate[tier]||[100],
-            icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🏡</text></svg>',
-          }));
-        }
-      });
-    `;
-    const blob = new Blob([swCode], {type:'application/javascript'});
-    const url = URL.createObjectURL(blob);
-    const reg = await navigator.serviceWorker.register(url, {scope:'/'});
+    const reg = await navigator.serviceWorker.register('/hive-sw.js', {scope:'/'});
     await navigator.serviceWorker.ready;
     return reg;
   } catch(e) {
@@ -752,13 +725,14 @@ function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onE
 // ─────────────────────────────────────────────────────────────────────────────
 //  NOTIFICATION PANEL (admin)
 // ─────────────────────────────────────────────────────────────────────────────
-function NotificationsPanel({swReg, notifPermission, onRequestPermission, notifLog, onSendNotif, autoConfig, onAutoConfig}){
+function NotificationsPanel({swReg, notifPermission, onRequestPermission, notifLog, onSendNotif, autoConfig, onAutoConfig, members}){
   const [tab,setTab]=useState('manual');
   const [tier,setTier]=useState('friendly');
   const [customMsg,setCustomMsg]=useState('');
   const [useTemplate,setUseTemplate]=useState(true);
   const [selTemplate,setSelTemplate]=useState(0);
   const [sending,setSending]=useState(false);
+  const [recipient,setRecipient]=useState('all');
 
   const tierInfo=TIERS[tier];
 
@@ -766,9 +740,8 @@ function NotificationsPanel({swReg, notifPermission, onRequestPermission, notifL
     const body=useTemplate?tierInfo.templates[selTemplate]:customMsg.trim();
     if(!body)return;
     setSending(true);
-    const ok=await onSendNotif({title:'🏡 Hive',body,tier,tag:`hive-manual-${Date.now()}`});
+    await onSendNotif({title:'🏡 Hive',body,tier,tag:`hive-manual-${Date.now()}`,targetUserId:recipient});
     setSending(false);
-    if(!ok)alert('Notification failed. Make sure permissions are granted and you\'re on a supported browser.');
   }
 
   const permColor = notifPermission==='granted'?'var(--friendly)':notifPermission==='denied'?'var(--urgent)':'var(--text-light)';
@@ -880,6 +853,14 @@ function NotificationsPanel({swReg, notifPermission, onRequestPermission, notifL
             </div>
           </div>
 
+          <div>
+            <label className="form-label">Send to</label>
+            <select className="input-field" value={recipient} onChange={e=>setRecipient(e.target.value)}>
+              <option value="all">Everyone</option>
+              {(members||[]).map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+
           <button
             className="btn-primary"
             disabled={notifPermission!=='granted'||sending}
@@ -950,7 +931,7 @@ function NotificationsPanel({swReg, notifPermission, onRequestPermission, notifL
                   <div style={{display:'flex',alignItems:'center',gap:'7px',flexWrap:'wrap',marginBottom:'3px'}}>
                     <span style={{fontWeight:500,fontSize:'13px',color:'var(--espresso)'}}>{n.title}</span>
                     <span className={`badge badge-${n.tier}`}>{TIERS[n.tier]?.label}</span>
-                    <span style={{fontSize:'11px',color:'var(--text-light)'}}>{n.auto?'Auto':'Manual'}</span>
+                    <span style={{fontSize:'11px',color:'var(--text-light)'}}>{n.auto?'Auto':'Manual'}{!n.auto&&n.targetUserId&&n.targetUserId!=='all'&&` → ${(members||[]).find(m=>m.id===n.targetUserId)?.name||'?'}`}</span>
                   </div>
                   <div style={{fontSize:'12px',color:'var(--text-mid)',lineHeight:1.5}}>{n.body}</div>
                   <div style={{fontSize:'11px',color:'var(--text-light)',marginTop:'4px'}}>{fmtDate(n.sentAt)} at {fmtTime(n.sentAt)}</div>
@@ -1045,7 +1026,9 @@ export default function App(){
   const [store,       setStoreRaw]     = useState(DEFAULT_STORE);
   const [notifLog,    setNotifLogRaw]  = useState([]);
   const [autoConfig,  setAutoConfigRaw]= useState(DEFAULT_AUTO);
-  const [completions, setCompletions]  = useState({}); // { [taskId]: userId }
+  const [completions,   setCompletions]  = useState({}); // { [taskId]: userId }
+  const [pendingNotifs, setPendingNotifs]= useState([]); // cross-device notification delivery
+  const shownNotifsRef = useRef(new Set(JSON.parse(localStorage.getItem('hive_shown_notifs')||'[]')));
 
   // ── Device-local session ──
   const [curId,    setCurIdRaw]  = useState(()=>lsGet('hive_session', null));
@@ -1063,7 +1046,8 @@ export default function App(){
         if(d.store      !== undefined) setStoreRaw(d.store);
         if(d.notifLog   !== undefined) setNotifLogRaw(d.notifLog);
         if(d.autoConfig !== undefined) setAutoConfigRaw(d.autoConfig);
-        if(d.completions!== undefined) setCompletions(d.completions);
+        if(d.completions  !== undefined) setCompletions(d.completions);
+        if(d.pendingNotifs!== undefined) setPendingNotifs(d.pendingNotifs);
         if(d.tasks      !== undefined){
           // Deduplicate by id in case of any prior race condition
           const seen=new Set();
@@ -1080,6 +1064,7 @@ export default function App(){
           notifLog: [],
           autoConfig: DEFAULT_AUTO,
           completions: {},
+          pendingNotifs: [],
         });
       }
       firestoreReady.current = true;
@@ -1154,6 +1139,18 @@ export default function App(){
     if(typeof Notification!=='undefined') setNotifPermission(Notification.permission);
   },[]);
 
+  // Show notifications addressed to this device's user
+  useEffect(()=>{
+    if(!curId||!pendingNotifs.length)return;
+    pendingNotifs.forEach(n=>{
+      if(shownNotifsRef.current.has(n.id))return;
+      if(n.targetUserId!=='all'&&n.targetUserId!==curId)return;
+      shownNotifsRef.current.add(n.id);
+      localStorage.setItem('hive_shown_notifs',JSON.stringify([...shownNotifsRef.current]));
+      sendNotification(swRegRef.current,{title:n.title,body:n.body,tier:n.tier,tag:`hive-notif-${n.id}`});
+    });
+  },[pendingNotifs,curId]);
+
   // Reload app when returning from background (e.g. swipe away and back on mobile)
   useEffect(()=>{
     let hiddenAt=null;
@@ -1203,10 +1200,14 @@ export default function App(){
     setNotifLog(prev=>[...prev,{title,body,tier,sentAt:Date.now(),auto:true,triggerId}]);
   }
 
-  async function handleSendNotif({title,body,tier,tag}){
-    const ok=await sendNotification(swRegRef.current,{title,body,tier,tag});
-    if(ok) setNotifLog(prev=>[...prev,{title,body,tier,sentAt:Date.now(),auto:false}]);
-    return ok;
+  async function handleSendNotif({title,body,tier,tag,targetUserId='all'}){
+    const notifId=uid();
+    const now=Date.now();
+    // Write to Firestore so every targeted device picks it up (purge notifs older than 24h)
+    const cleaned=pendingNotifs.filter(n=>now-n.sentAt<86400000);
+    setDoc(HIVE_DOC,{pendingNotifs:[...cleaned,{id:notifId,targetUserId,title,body,tier,sentAt:now}]},{merge:true});
+    setNotifLog(prev=>[...prev,{title,body,tier,sentAt:now,auto:false,targetUserId}]);
+    return true;
   }
 
   async function handleRequestPermission(){
@@ -1510,6 +1511,7 @@ export default function App(){
                 onSendNotif={handleSendNotif}
                 autoConfig={autoConfig}
                 onAutoConfig={handleAutoConfig}
+                members={users.filter(u=>u.role!=='admin')}
               />
             ):(
               <div className="fade-up">
