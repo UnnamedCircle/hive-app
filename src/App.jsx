@@ -542,6 +542,69 @@ function AddTaskModal({members,onSave,onClose}){
   );
 }
 
+function EditTaskModal({task,members,onSave,onClose}){
+  const [name,setName]=useState(task.name);
+  const [icon,setIcon]=useState(task.icon);
+  const [pts,setPts]=useState(task.points);
+  const [assignTo,setAssignTo]=useState(task.assignedTo||'');
+  const [repeats,setRepeats]=useState(!!task.recurrence);
+  const [every,setEvery]=useState(()=>{const m=task.recurrence?.match(/Every (\d+)/);return m?Number(m[1]):1;});
+  const [unit,setUnit]=useState(()=>{const m=task.recurrence?.match(/Every \d+ (\w+)/);return m?m[1]:'days';});
+  function save(){
+    if(!name.trim())return;
+    onSave({...task,name:name.trim(),icon,points:Number(pts),assignedTo:assignTo||null,recurrence:repeats?`Every ${every} ${unit}`:null});
+  }
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
+          <h2 style={{fontSize:'20px',color:'var(--espresso)'}}>Edit task</h2>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:'20px',cursor:'pointer',color:'var(--text-light)'}}>✕</button>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:'14px'}}>
+          <div><label className="form-label">Task name</label><input className="input-field" value={name} onChange={e=>setName(e.target.value)}/></div>
+          <div>
+            <label className="form-label">Icon</label>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginTop:'2px'}}>
+              {TASK_ICONS.map(ic=><button key={ic} className={`icon-btn ${icon===ic?'sel':''}`} onClick={()=>setIcon(ic)}>{ic}</button>)}
+            </div>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'11px'}}>
+            <div><label className="form-label">Points</label><input className="input-field" type="number" min="1" max="999" value={pts} onChange={e=>setPts(e.target.value)}/></div>
+            <div>
+              <label className="form-label">Assign to</label>
+              <select className="input-field" value={assignTo} onChange={e=>setAssignTo(e.target.value)}>
+                <option value="">Anyone</option>
+                {members.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="form-label">Repeat</label>
+            <div style={{display:'flex',gap:'8px',marginBottom:'8px'}}>
+              <button className={`recur-btn ${!repeats?'sel':''}`} onClick={()=>setRepeats(false)}>One-off</button>
+              <button className={`recur-btn ${repeats?'sel':''}`} onClick={()=>setRepeats(true)}>Repeating</button>
+            </div>
+            {repeats&&(
+              <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+                <span style={{fontSize:'13px',color:'var(--text-mid)',whiteSpace:'nowrap'}}>Every</span>
+                <input className="input-field" type="number" min="1" value={every} onChange={e=>setEvery(e.target.value)} style={{width:'62px'}}/>
+                <select className="input-field" value={unit} onChange={e=>setUnit(e.target.value)}>
+                  <option value="days">Days</option><option value="weeks">Weeks</option><option value="months">Months</option>
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:'10px',marginTop:'20px'}}>
+          <button className="btn-ghost" onClick={onClose} style={{flex:1}}>Cancel</button>
+          <button className="btn-primary" onClick={save} style={{flex:2}}>Save changes</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InviteModal({onSave,onClose}){
   const [name,setName]=useState('');const [email,setEmail]=useState('');
   const [pass,setPass]=useState('');const [role,setRole]=useState('family');
@@ -610,10 +673,48 @@ function AddRewardModal({onSave,onClose}){
   );
 }
 
+function EditRewardModal({item,onSave,onClose}){
+  const [name,setName]=useState(item.name);
+  const [cost,setCost]=useState(item.cost);
+  const [emoji,setEmoji]=useState(item.emoji);
+  const [img,setImg]=useState(item.image||'');
+  function handleFile(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>setImg(r.result);r.readAsDataURL(f);}
+  function save(){if(!name.trim())return;onSave({...item,name:name.trim(),cost:Number(cost),emoji,image:img});}
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box" onClick={e=>e.stopPropagation()}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'20px'}}>
+          <h2 style={{fontSize:'20px',color:'var(--espresso)'}}>Edit reward</h2>
+          <button onClick={onClose} style={{background:'none',border:'none',fontSize:'20px',cursor:'pointer',color:'var(--text-light)'}}>✕</button>
+        </div>
+        <div style={{display:'flex',flexDirection:'column',gap:'13px'}}>
+          <div><label className="form-label">Reward name</label><input className="input-field" value={name} onChange={e=>setName(e.target.value)}/></div>
+          <div><label className="form-label">Point cost</label><input className="input-field" type="number" min="1" value={cost} onChange={e=>setCost(e.target.value)}/></div>
+          <div>
+            <label className="form-label">Icon</label>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginTop:'2px'}}>
+              {STORE_EMOJIS.map(em=><button key={em} className={`icon-btn icon-btn-gold ${emoji===em?'sel':''}`} style={{borderColor:emoji===em?'var(--gold)':undefined,background:emoji===em?'rgba(201,168,76,0.15)':undefined}} onClick={()=>setEmoji(em)}>{em}</button>)}
+            </div>
+          </div>
+          <div>
+            <label className="form-label">Upload image (optional)</label>
+            <input type="file" accept="image/*" onChange={handleFile} style={{fontSize:'13px',color:'var(--text-mid)'}}/>
+            {img&&<img src={img} alt="" style={{width:'100%',height:'100px',objectFit:'cover',borderRadius:'9px',marginTop:'8px'}}/>}
+          </div>
+          <div style={{display:'flex',gap:'10px',marginTop:'4px'}}>
+            <button className="btn-ghost" onClick={onClose} style={{flex:1}}>Cancel</button>
+            <button className="btn-gold" onClick={save} style={{flex:2}}>Save changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
-function TaskCard({task,userId,members,onComplete,canDelete,onDelete}){
+function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onEdit}){
   const done=task.completedBy.includes(userId);
   const ref=useRef(null);
   function check(){
@@ -641,7 +742,8 @@ function TaskCard({task,userId,members,onComplete,canDelete,onDelete}){
           {!task.assignedTo&&<span style={{fontSize:'11px',color:'var(--text-light)'}}>Anyone</span>}
         </div>
       </div>
-      {canDelete&&<button onClick={()=>onDelete(task.id)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'18px',padding:'2px 6px'}}>×</button>}
+      {canEdit&&<button onClick={()=>onEdit(task)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'16px',padding:'2px 6px'}} title="Edit">✎</button>}
+      {canDelete&&<button onClick={()=>{if(window.confirm(`Delete "${task.name}"?`))onDelete(task.id);}} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'18px',padding:'2px 6px'}} title="Delete">×</button>}
     </div>
   );
 }
@@ -1029,6 +1131,8 @@ export default function App(){
   const [view,setView]=useState('tasks');
   const [toast,setToast]=useState(null);
   const [modal,setModal]=useState(null);
+  const [editingTask,setEditingTask]=useState(null);
+  const [editingReward,setEditingReward]=useState(null);
 
   const cu=users.find(u=>u.id===curId)||null;
   const isAdmin=cu?.role==='admin';
@@ -1127,7 +1231,10 @@ export default function App(){
     setTimeout(()=>toastMsg(`🎉 +${pts} points earned!`),220);
   }
   function handleDeleteTask(id){setTasks(p=>p.filter(t=>t.id!==id));}
+  function handleEditTask(updated){setTasks(p=>p.map(t=>t.id===updated.id?updated:t));setEditingTask(null);toastMsg('Task updated ✓');}
   function handleAddReward(item){setStore(p=>[...p,item]);setModal(null);toastMsg('Reward added ✓');}
+  function handleEditReward(updated){setStore(p=>p.map(r=>r.id===updated.id?updated:r));setEditingReward(null);toastMsg('Reward updated ✓');}
+  function handleDeleteReward(id){setStore(p=>p.filter(r=>r.id!==id));}
   function handleBuy(item){
     if(!cu||cu.points<item.cost){toastMsg('Not enough points! Keep going 💪');return;}
     setUsers(p=>p.map(u=>u.id===cu.id?{...u,points:u.points-item.cost}:u));
@@ -1140,8 +1247,8 @@ export default function App(){
     ...(isAdmin?[
       {id:'members',label:'👥  Members'},
       {id:'admin',label:'⚙️  Admin'},
-      {id:'notifications',label:'🔔  Notifications'},
     ]:[]),
+    {id:'notifications',label:'🔔  Notifications'},
     {id:'leaderboard',label:'🏅  Leaderboard'},
   ];
 
@@ -1178,6 +1285,8 @@ export default function App(){
       {modal==='addTask'&&<AddTaskModal members={users.filter(u=>u.role!=='admin')} onSave={handleAddTask} onClose={()=>setModal(null)}/>}
       {modal==='invite'&&<InviteModal onSave={handleInvite} onClose={()=>setModal(null)}/>}
       {modal==='addReward'&&<AddRewardModal onSave={handleAddReward} onClose={()=>setModal(null)}/>}
+      {editingTask&&<EditTaskModal task={editingTask} members={users.filter(u=>u.role!=='admin')} onSave={handleEditTask} onClose={()=>setEditingTask(null)}/>}
+      {editingReward&&<EditRewardModal item={editingReward} onSave={handleEditReward} onClose={()=>setEditingReward(null)}/>}
 
       <div className="app-shell">
         {/* TOP BAR */}
@@ -1231,7 +1340,7 @@ export default function App(){
               {myTasks.length===0&&<div className="empty-state"><div className="empty-emoji">🌿</div><div className="empty-title">No tasks yet</div><p style={{fontSize:'13px'}}>{isAdmin?'Add some tasks above!':'Check back soon.'}</p></div>}
               {pending.map((t,i)=>(
                 <div key={t.id} style={{animation:`fadeUp 0.3s ease ${i*0.05}s both`}}>
-                  <TaskCard task={t} userId={cu.id} members={users} onComplete={handleComplete} canDelete={isAdmin} onDelete={handleDeleteTask}/>
+                  <TaskCard task={t} userId={cu.id} members={users} onComplete={handleComplete} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask}/>
                 </div>
               ))}
               {doneT.length>0&&(
@@ -1241,7 +1350,7 @@ export default function App(){
                     <span style={{fontSize:'11px',color:'var(--text-light)',fontWeight:500,whiteSpace:'nowrap'}}>Completed ✓</span>
                     <div style={{flex:1,height:'1px',background:'var(--cream-dark)'}}/>
                   </div>
-                  {doneT.map(t=><TaskCard key={t.id} task={t} userId={cu.id} members={users} onComplete={()=>{}} canDelete={isAdmin} onDelete={handleDeleteTask}/>)}
+                  {doneT.map(t=><TaskCard key={t.id} task={t} userId={cu.id} members={users} onComplete={()=>{}} canDelete={isAdmin} onDelete={handleDeleteTask} canEdit={isAdmin} onEdit={setEditingTask}/>)}
                 </>
               )}
             </div>
@@ -1284,6 +1393,12 @@ export default function App(){
                           {cu.points>=item.cost?'Redeem':'Need more'}
                         </button>
                       </div>
+                      {isAdmin&&(
+                        <div style={{display:'flex',gap:'7px',marginTop:'9px',borderTop:'1px solid var(--cream-dark)',paddingTop:'9px'}}>
+                          <button onClick={()=>setEditingReward(item)} style={{flex:1,padding:'5px',borderRadius:'7px',border:'1.5px solid var(--cream-dark)',background:'transparent',cursor:'pointer',fontSize:'12px',color:'var(--text-mid)',fontFamily:'DM Sans,sans-serif'}}>✎ Edit</button>
+                          <button onClick={()=>{if(window.confirm(`Delete "${item.name}"?`))handleDeleteReward(item.id);}} style={{flex:1,padding:'5px',borderRadius:'7px',border:'1.5px solid var(--cream-dark)',background:'transparent',cursor:'pointer',fontSize:'12px',color:'var(--urgent)',fontFamily:'DM Sans,sans-serif'}}>× Delete</button>
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -1363,7 +1478,8 @@ export default function App(){
                         {t.points} pts · {t.recurrence||'One-off'} · {t.assignedTo?users.find(u=>u.id===t.assignedTo)?.name||'Unknown':'Anyone'}
                       </div>
                     </div>
-                    <button onClick={()=>handleDeleteTask(t.id)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'18px',padding:'2px 6px'}}>×</button>
+                    <button onClick={()=>setEditingTask(t)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'16px',padding:'2px 6px'}} title="Edit">✎</button>
+                    <button onClick={()=>{if(window.confirm(`Delete "${t.name}"?`))handleDeleteTask(t.id);}} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'18px',padding:'2px 6px'}} title="Delete">×</button>
                   </div>
                 ))}
               </div>
@@ -1371,16 +1487,39 @@ export default function App(){
           )}
 
           {/* NOTIFICATIONS */}
-          {view==='notifications'&&isAdmin&&(
-            <NotificationsPanel
-              swReg={swRegRef.current}
-              notifPermission={notifPermission}
-              onRequestPermission={handleRequestPermission}
-              notifLog={notifLog}
-              onSendNotif={handleSendNotif}
-              autoConfig={autoConfig}
-              onAutoConfig={handleAutoConfig}
-            />
+          {view==='notifications'&&(
+            isAdmin?(
+              <NotificationsPanel
+                swReg={swRegRef.current}
+                notifPermission={notifPermission}
+                onRequestPermission={handleRequestPermission}
+                notifLog={notifLog}
+                onSendNotif={handleSendNotif}
+                autoConfig={autoConfig}
+                onAutoConfig={handleAutoConfig}
+              />
+            ):(
+              <div className="fade-up">
+                <h2 style={{fontSize:'24px',color:'var(--espresso)',letterSpacing:'-0.3px',marginBottom:'5px'}}>Notifications</h2>
+                <p style={{color:'var(--text-light)',fontSize:'13px',marginBottom:'20px'}}>Get push notifications for task reminders.</p>
+                <div className="card" style={{padding:'22px',display:'flex',flexDirection:'column',gap:'14px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'12px'}}>
+                    <div className={`notif-status-dot ${notifPermission==='granted'?'dot-granted':notifPermission==='denied'?'dot-denied':'dot-default'}`}/>
+                    <div>
+                      <div style={{fontWeight:500,fontSize:'14px',color:'var(--espresso)'}}>
+                        {notifPermission==='granted'?'Notifications enabled':notifPermission==='denied'?'Notifications blocked':'Notifications not enabled'}
+                      </div>
+                      <div style={{fontSize:'12px',color:'var(--text-light)',marginTop:'2px'}}>
+                        {notifPermission==='granted'?'You\'ll receive task reminders on this device.':notifPermission==='denied'?'Unblock notifications in your browser/device settings.':'Tap below to enable push notifications.'}
+                      </div>
+                    </div>
+                  </div>
+                  {notifPermission!=='granted'&&notifPermission!=='denied'&&(
+                    <button className="btn-primary" onClick={handleRequestPermission}>Enable notifications</button>
+                  )}
+                </div>
+              </div>
+            )
           )}
 
           {/* LEADERBOARD */}
