@@ -715,7 +715,8 @@ function EditRewardModal({item,onSave,onClose}){
 //  TASK CARD
 // ─────────────────────────────────────────────────────────────────────────────
 function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onEdit}){
-  const done=task.completedBy.includes(userId);
+  const done=task.completedBy.length>0;
+  const completer=done?members.find(m=>m.id===task.completedBy[0]):null;
   const ref=useRef(null);
   function check(){
     if(done)return;
@@ -738,8 +739,9 @@ function TaskCard({task,userId,members,onComplete,canDelete,onDelete,canEdit,onE
         <div style={{display:'flex',gap:'6px',marginTop:'5px',flexWrap:'wrap',alignItems:'center'}}>
           <span className="badge badge-gold">✦ {task.points} pts</span>
           {task.recurrence&&<span className="badge badge-sage">{task.recurrence}</span>}
-          {assignee&&<span className="badge badge-blush">👤 {assignee.name.split(' ')[0]}</span>}
-          {!task.assignedTo&&<span style={{fontSize:'11px',color:'var(--text-light)'}}>Anyone</span>}
+          {assignee&&!done&&<span className="badge badge-blush">👤 {assignee.name.split(' ')[0]}</span>}
+          {!task.assignedTo&&!done&&<span style={{fontSize:'11px',color:'var(--text-light)'}}>Anyone</span>}
+          {done&&<span className="badge badge-friendly">✓ {completer?completer.name.split(' ')[0]:'Done'}</span>}
         </div>
       </div>
       {canEdit&&<button onClick={()=>onEdit(task)} style={{background:'none',border:'none',cursor:'pointer',color:'var(--text-light)',fontSize:'16px',padding:'2px 6px'}} title="Edit">✎</button>}
@@ -1226,7 +1228,9 @@ export default function App(){
   }
   function handleAddTask(task){setTasks(p=>[task,...p]);setModal(null);toastMsg('Task added ✓');}
   function handleComplete(taskId,userId,pts){
-    setTasks(p=>p.map(t=>t.id===taskId?{...t,completedBy:[...t.completedBy,userId]}:t));
+    const task=tasks.find(t=>t.id===taskId);
+    if(!task||task.completedBy.length>0)return; // already completed by someone
+    setTasks(p=>p.map(t=>t.id===taskId?{...t,completedBy:[userId]}:t));
     setUsers(p=>p.map(u=>u.id===userId?{...u,points:u.points+pts}:u));
     setTimeout(()=>toastMsg(`🎉 +${pts} points earned!`),220);
   }
@@ -1274,8 +1278,8 @@ export default function App(){
   if(!cu) return <><FontLoader/><Login users={users} onLogin={handleLogin} onRegister={handleRegister}/></>;
 
   const myTasks=isAdmin?tasks:tasks.filter(t=>!t.assignedTo||t.assignedTo===cu.id);
-  const pending=myTasks.filter(t=>!t.completedBy.includes(cu.id));
-  const doneT=myTasks.filter(t=>t.completedBy.includes(cu.id));
+  const pending=myTasks.filter(t=>t.completedBy.length===0);
+  const doneT=myTasks.filter(t=>t.completedBy.length>0);
   const pct=myTasks.length?Math.round(doneT.length/myTasks.length*100):0;
 
   return (
