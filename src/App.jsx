@@ -1040,6 +1040,22 @@ export default function App(){
     if(typeof Notification!=='undefined') setNotifPermission(Notification.permission);
   },[]);
 
+  // Reload app when returning from background (e.g. swipe away and back on mobile)
+  useEffect(()=>{
+    let hiddenAt=null;
+    const onVisibility=()=>{
+      if(document.visibilityState==='hidden'){
+        hiddenAt=Date.now();
+      } else if(document.visibilityState==='visible'&&hiddenAt){
+        // Reload if app was in background for more than 5 minutes
+        if(Date.now()-hiddenAt>5*60*1000) window.location.reload();
+        hiddenAt=null;
+      }
+    };
+    document.addEventListener('visibilitychange',onVisibility);
+    return()=>document.removeEventListener('visibilitychange',onVisibility);
+  },[]);
+
   // Auto-trigger simulation: check every 60s when app is open
   useEffect(()=>{
     if(!isAdmin||notifPermission!=='granted')return;
