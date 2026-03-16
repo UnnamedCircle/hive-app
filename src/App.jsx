@@ -1201,7 +1201,7 @@ export default function App(){
                 <PtsCount pts={cu.points}/>
               </span>
             </div>
-            <div style={{cursor:'pointer'}} onClick={handleLogout} title="Sign out">
+            <div style={{cursor:'pointer'}} onClick={()=>{if(window.confirm('Sign out of Hive?'))handleLogout();}} title="Sign out">
               <Av name={cu.name} color={cu.color} size={32}/>
             </div>
           </div>
