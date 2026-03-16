@@ -2,6 +2,14 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { db } from './firebase';
 import { doc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore';
 
+const VAPID_PUBLIC_KEY = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+function urlBase64ToUint8Array(b64) {
+  const pad = '='.repeat((4 - b64.length % 4) % 4);
+  const base64 = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  STYLES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1018,6 +1026,21 @@ const DEFAULT_AUTO = Object.fromEntries(AUTO_TRIGGERS.map(t=>[t.id,{enabled:fals
 
 const HIVE_DOC = doc(db, 'hive', 'data');
 
+async function subscribeToPush(swReg, userId) {
+  if (!VAPID_PUBLIC_KEY || !swReg) return;
+  try {
+    const existing = await swReg.pushManager.getSubscription();
+    const sub = existing || await swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+    });
+    const deviceId = lsGet('hive_device_id', null) || (()=>{
+      const id = uid(); lsSet('hive_device_id', id); return id;
+    })();
+    updateDoc(HIVE_DOC, { [`pushSubs.${userId}.${deviceId}`]: sub.toJSON() });
+  } catch(e) { console.warn('Push subscription failed:', e); }
+}
+
 export default function App(){
   // ── Firestore-backed shared state ──
   const [loading,     setLoading]      = useState(true);
@@ -1027,7 +1050,8 @@ export default function App(){
   const [notifLog,    setNotifLogRaw]  = useState([]);
   const [autoConfig,  setAutoConfigRaw]= useState(DEFAULT_AUTO);
   const [completions,   setCompletions]  = useState({}); // { [taskId]: userId }
-  const [pendingNotifs, setPendingNotifs]= useState([]); // cross-device notification delivery
+  const [pendingNotifs, setPendingNotifs]= useState([]); // in-app notification delivery
+  const [pushSubs,      setPushSubs]     = useState({}); // { [userId]: { [deviceId]: subscription } }
   const shownNotifsRef = useRef(new Set(JSON.parse(localStorage.getItem('hive_shown_notifs')||'[]')));
 
   // ── Device-local session ──
@@ -1048,6 +1072,7 @@ export default function App(){
         if(d.autoConfig !== undefined) setAutoConfigRaw(d.autoConfig);
         setCompletions(d.completions ?? {});
         if(d.pendingNotifs!== undefined) setPendingNotifs(d.pendingNotifs);
+        if(d.pushSubs     !== undefined) setPushSubs(d.pushSubs);
         // Back-fill missing fields for documents created before these were added
         const missing={};
         if(d.completions  === undefined) missing.completions  = {};
@@ -1201,16 +1226,44 @@ export default function App(){
   async function triggerAutoNotif(triggerId, body){
     const tier=autoConfig[triggerId]?.tier||'friendly';
     const title='🏡 Hive';
-    await sendNotification(swRegRef.current,{title,body,tier,tag:`hive-auto-${triggerId}`});
-    setNotifLog(prev=>[...prev,{title,body,tier,sentAt:Date.now(),auto:true,triggerId}]);
+    const notifId=uid();
+    const now=Date.now();
+    // Firestore delivery (in-app)
+    const cleaned=pendingNotifs.filter(n=>now-n.sentAt<86400000);
+    setDoc(HIVE_DOC,{pendingNotifs:[...cleaned,{id:notifId,targetUserId:'all',title,body,tier,sentAt:now}]},{merge:true});
+    // VAPID push (background)
+    const subs=collectSubs('all');
+    if(subs.length>0){
+      fetch('/api/send-push',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({subscriptions:subs,title,body,tier})
+      }).catch(e=>console.warn('Auto VAPID push failed:',e));
+    }
+    setNotifLog(prev=>[...prev,{title,body,tier,sentAt:now,auto:true,triggerId}]);
+  }
+
+  function collectSubs(targetUserId){
+    const subs=[];
+    if(targetUserId==='all'){
+      Object.values(pushSubs).forEach(devices=>Object.values(devices).forEach(s=>subs.push(s)));
+    } else {
+      Object.values(pushSubs[targetUserId]||{}).forEach(s=>subs.push(s));
+    }
+    return subs;
   }
 
   async function handleSendNotif({title,body,tier,tag,targetUserId='all'}){
     const notifId=uid();
     const now=Date.now();
-    // Write to Firestore so every targeted device picks it up (purge notifs older than 24h)
+    // 1. Firestore delivery (shows when app is open)
     const cleaned=pendingNotifs.filter(n=>now-n.sentAt<86400000);
     setDoc(HIVE_DOC,{pendingNotifs:[...cleaned,{id:notifId,targetUserId,title,body,tier,sentAt:now}]},{merge:true});
+    // 2. VAPID push delivery (works when app is closed)
+    const subs=collectSubs(targetUserId);
+    if(subs.length>0){
+      fetch('/api/send-push',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({subscriptions:subs,title,body,tier})
+      }).catch(e=>console.warn('VAPID push failed:',e));
+    }
     setNotifLog(prev=>[...prev,{title,body,tier,sentAt:now,auto:false,targetUserId}]);
     return true;
   }
@@ -1218,9 +1271,19 @@ export default function App(){
   async function handleRequestPermission(){
     const result=await requestNotifPermission();
     setNotifPermission(result);
-    if(result==='granted') toastMsg('Notifications enabled! ✓');
-    else if(result==='denied') toastMsg('Notifications blocked. Check browser settings.');
+    if(result==='granted'){
+      toastMsg('Notifications enabled! ✓');
+      subscribeToPush(swRegRef.current, curId);
+    } else if(result==='denied') toastMsg('Notifications blocked. Check browser settings.');
   }
+
+  // Auto-subscribe to push when Firestore loads if permission already granted
+  useEffect(()=>{
+    if(loading||!curId||!swRegRef.current)return;
+    if(typeof Notification!=='undefined'&&Notification.permission==='granted'){
+      subscribeToPush(swRegRef.current,curId);
+    }
+  },[loading,curId]);
 
   function handleAutoConfig(triggerId,cfg){
     setAutoConfig(prev=>({...prev,[triggerId]:cfg}));
